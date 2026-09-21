@@ -115,10 +115,21 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Right: Actions */}
         <div className="flex items-center gap-2">
-          {isFallback && (
-            <span className="flex items-center gap-1 text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-1 rounded">
-              <ShieldAlert className="w-3 h-3" />
+          {isFallback ? (
+            <span
+              className="flex items-center gap-1.5 text-[11px] font-mono text-amber-400 bg-amber-500/10 border border-amber-500/30 px-2.5 py-1 rounded-md"
+              title="Calculated Black-Scholes synthetic chain used as fallback"
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
               <span>Simulated Feed</span>
+            </span>
+          ) : (
+            <span
+              className="flex items-center gap-1.5 text-[11px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1 rounded-md"
+              title="Real-time live options chain from Yahoo Finance"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="font-bold">Real Yahoo Data</span>
             </span>
           )}
 
