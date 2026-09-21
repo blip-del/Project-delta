@@ -1,0 +1,6 @@
+{
+  "name": "Options Analyzer Terminal",
+  "description": "Professional stock options chain screener, payoff simulator, and ready-to-run Streamlit Python app generator with live market data.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
