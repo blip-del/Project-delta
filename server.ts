@@ -451,6 +451,205 @@ app.get("/api/options/:ticker", async (req, res) => {
   }
 });
 
+// Strike across DTEs comparison endpoint
+app.get("/api/options/:ticker/strike-dte-comparison", async (req, res) => {
+  try {
+    const { ticker } = req.params;
+    const rawStrike = req.query.strike ? Number(req.query.strike) : undefined;
+    const optionType = (String(req.query.type || "CALL").toUpperCase() === "PUT" ? "PUT" : "CALL") as "CALL" | "PUT";
+    const limit = Math.min(25, Math.max(3, req.query.limit ? Number(req.query.limit) : 10));
+
+    if (!ticker) {
+      return res.status(400).json({ error: "Ticker symbol is required" });
+    }
+
+    // 1. Fetch primary chain to retrieve quote, strikes, and list of all expiration dates
+    const baseData = await fetchYahooOptionsChain(ticker);
+    const quote = baseData.quote;
+    const S = quote.regularMarketPrice || 100;
+    const allExpirations: number[] = baseData.expirationDates || [];
+
+    if (allExpirations.length === 0) {
+      return res.status(404).json({ error: `No options expirations found for ${ticker}` });
+    }
+
+    // Take closest N expiration dates
+    const targetExpirations = allExpirations.slice(0, limit);
+
+    // Determine available strikes and default strike
+    const availableStrikes: number[] = (baseData.strikes && baseData.strikes.length > 0)
+      ? baseData.strikes
+      : (baseData.options?.[0]?.calls.map((c: any) => c.strike) || [S]);
+
+    let resolvedStrike = rawStrike;
+    if (resolvedStrike === undefined || isNaN(resolvedStrike)) {
+      resolvedStrike = availableStrikes.reduce((prev, curr) =>
+        Math.abs(curr - S) < Math.abs(prev - S) ? curr : prev, availableStrikes[0] || S
+      );
+    }
+
+    // 2. Fetch chains for all target expirations in parallel
+    const chains = await Promise.all(
+      targetExpirations.map((expDate) => fetchYahooOptionsChain(ticker, expDate))
+    );
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const rows = [];
+
+    for (let i = 0; i < chains.length; i++) {
+      const chain = chains[i];
+      const expDate = targetExpirations[i];
+      const optSet = chain.options?.[0] || { calls: [], puts: [] };
+      const contracts = optionType === "CALL" ? optSet.calls : optSet.puts;
+
+      if (!contracts || contracts.length === 0) continue;
+
+      // Find contract for resolvedStrike (or closest strike available in this expiration)
+      let match = contracts.find((c: any) => Math.abs(c.strike - resolvedStrike!) < 0.05);
+      if (!match) {
+        match = contracts.reduce((prev: any, curr: any) =>
+          Math.abs(curr.strike - resolvedStrike!) < Math.abs(prev.strike - resolvedStrike!) ? curr : prev, contracts[0]
+        );
+      }
+
+      if (match) {
+        const dte = Math.max(1, Math.round((expDate - nowSec) / 86400));
+        const expDateObj = new Date(expDate * 1000);
+        const formattedDate = expDateObj.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: expDateObj.getFullYear() !== new Date().getFullYear() ? "2-digit" : undefined,
+        });
+
+        const B = match.bid > 0 ? match.bid : (match.lastPrice > 0 ? match.lastPrice : 0.05);
+        const A = match.ask > 0 ? match.ask : (B > 0 ? Number((B * 1.05).toFixed(2)) : 0.1);
+        const mid = Number(((B + A) / 2).toFixed(2));
+        const spread = Number((Math.max(0, A - B)).toFixed(2));
+        const K = match.strike;
+
+        let capitalRequired = 0;
+        let premiumCollected = Number((B * 100).toFixed(2));
+        let premiumYieldPercent = 0;
+        let premiumAnnualizedApr = 0;
+        let maxProfitPerContract = 0;
+        let maxReturnPercent = 0;
+        let maxAnnualizedApr = 0;
+        let breakEven = 0;
+        let downsideBufferPercent = 0;
+
+        if (optionType === "CALL") {
+          // Covered Call: 100 shares at current market S, short 1 call at strike K
+          capitalRequired = Math.max(1, Number(((S - B) * 100).toFixed(2)));
+          // Premium yield on stock cost basis:
+          premiumYieldPercent = Number(((B / S) * 100).toFixed(2));
+          premiumAnnualizedApr = Number(((premiumYieldPercent * 365) / dte).toFixed(1));
+
+          // If assigned at expiration at strike K:
+          const profitPerShare = K >= S ? (K - S + B) : B;
+          maxProfitPerContract = Number((profitPerShare * 100).toFixed(2));
+          maxReturnPercent = Number(((profitPerShare / S) * 100).toFixed(2));
+          maxAnnualizedApr = Number(((maxReturnPercent * 365) / dte).toFixed(1));
+
+          breakEven = Number((S - B).toFixed(2));
+          downsideBufferPercent = Number(((B / S) * 100).toFixed(2));
+        } else {
+          // Cash-Secured Put: Collateral required is K * 100
+          capitalRequired = Number((K * 100).toFixed(2));
+          // Return on Collateral:
+          premiumYieldPercent = Number(((B / K) * 100).toFixed(2));
+          premiumAnnualizedApr = Number(((premiumYieldPercent * 365) / dte).toFixed(1));
+
+          maxProfitPerContract = Number((B * 100).toFixed(2));
+          maxReturnPercent = premiumYieldPercent;
+          maxAnnualizedApr = premiumAnnualizedApr;
+
+          breakEven = Number((K - B).toFixed(2));
+          downsideBufferPercent = Number((((S - (K - B)) / S) * 100).toFixed(2));
+        }
+
+        rows.push({
+          expirationDate: expDate,
+          formattedDate,
+          dte,
+          strike: K,
+          contractSymbol: match.contractSymbol,
+          bid: match.bid,
+          ask: match.ask,
+          mid,
+          spread,
+          lastPrice: match.lastPrice,
+          volume: match.volume || 0,
+          openInterest: match.openInterest || 0,
+          impliedVolatility: match.impliedVolatility,
+          delta: match.delta,
+          theta: match.theta,
+          gamma: match.gamma,
+          vega: match.vega,
+          inTheMoney: match.inTheMoney,
+          capitalRequired,
+          premiumCollected,
+          premiumYieldPercent,
+          premiumAnnualizedApr,
+          maxProfitPerContract,
+          maxReturnPercent,
+          maxAnnualizedApr,
+          breakEven,
+          downsideBufferPercent,
+        });
+      }
+    }
+
+    // Sort rows by DTE ascending
+    rows.sort((a, b) => a.dte - b.dte);
+
+    // Identify Sweet Spot & Records
+    let highestAprDte: number | undefined;
+    let highestPremiumDte: number | undefined;
+    let sweetSpotDte: number | undefined;
+    let maxApr = -Infinity;
+    let maxPrem = -Infinity;
+
+    rows.forEach((r) => {
+      if (r.premiumAnnualizedApr > maxApr) {
+        maxApr = r.premiumAnnualizedApr;
+        highestAprDte = r.dte;
+      }
+      if (r.premiumCollected > maxPrem) {
+        maxPrem = r.premiumCollected;
+        highestPremiumDte = r.dte;
+      }
+    });
+
+    // Best velocity sweet spot: usually 21 to 45 DTE with optimal APR
+    const sweetSpotCandidates = rows.filter((r) => r.dte >= 14 && r.dte <= 60);
+    if (sweetSpotCandidates.length > 0) {
+      const bestCandidate = [...sweetSpotCandidates].sort(
+        (a, b) => b.premiumAnnualizedApr - a.premiumAnnualizedApr
+      )[0];
+      sweetSpotDte = bestCandidate.dte;
+    } else {
+      sweetSpotDte = highestAprDte;
+    }
+
+    return res.json({
+      symbol: quote.symbol || ticker.toUpperCase(),
+      quote,
+      strategy: optionType === "CALL" ? "COVERED_CALL" : "CASH_SECURED_PUT",
+      optionType,
+      strike: resolvedStrike,
+      availableStrikes,
+      rows,
+      highestAprDte,
+      highestPremiumDte,
+      sweetSpotDte,
+    });
+  } catch (error: any) {
+    console.error("API error in strike-dte-comparison:", error);
+    return res.status(500).json({ error: error.message || "Failed to compare DTEs" });
+  }
+});
+
+
 // Ticker search/suggestions
 app.get("/api/search", (req, res) => {
   const q = String(req.query.q || "").toUpperCase().trim();

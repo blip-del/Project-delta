@@ -1,0 +1,6 @@
+{
+  "summary": "Implementation plan for comparing the same option strike across the 10 closest DTE expirations.\nSupports both Covered Calls and Cash-Secured Puts.\nFeatures a comparative ranking table with APR/yield calculations, max return metrics, and an APR velocity curve chart.\nClean integration as a dedicated tab in the navigation bar with quick-launch buttons from the chain table.",
+  "updatedAt": "2026-10-13T19:29:44.303996888Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

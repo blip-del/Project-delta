@@ -1,6 +1,6 @@
 import React from "react";
 import { OptionContract, StrategyLeg } from "../types";
-import { Plus, Check, TrendingUp, TrendingDown } from "lucide-react";
+import { Plus, Check, TrendingUp, TrendingDown, CalendarRange } from "lucide-react";
 
 interface OptionsChainTableProps {
   currentPrice: number;
@@ -9,6 +9,7 @@ interface OptionsChainTableProps {
   selectedLegs: StrategyLeg[];
   onToggleContract: (contract: OptionContract, type: "CALL" | "PUT", defaultAction: "BUY" | "SELL") => void;
   strikeFilter: string;
+  onCompareStrike?: (strike: number, type?: "CALL" | "PUT") => void;
 }
 
 export const OptionsChainTable: React.FC<OptionsChainTableProps> = ({
@@ -18,6 +19,7 @@ export const OptionsChainTable: React.FC<OptionsChainTableProps> = ({
   selectedLegs,
   onToggleContract,
   strikeFilter,
+  onCompareStrike,
 }) => {
   // Map puts and calls by strike
   const strikesSet = new Set<number>();
@@ -209,18 +211,30 @@ export const OptionsChainTable: React.FC<OptionsChainTableProps> = ({
 
                   {/* --- CENTER STRIKE --- */}
                   <td
-                    className={`py-2 px-3 text-center font-black border-x border-[#1a2b40] font-mono ${
+                    className={`py-2 px-2 text-center font-black border-x border-[#1a2b40] font-mono group relative ${
                       isAtm
                         ? "bg-cyan-500/20 text-cyan-300 ring-1 ring-cyan-400"
                         : "bg-[#0d1624] text-white"
                     }`}
                   >
-                    <div className="flex items-center justify-center gap-1">
+                    <div className="flex items-center justify-center gap-1.5">
                       <span>${strike.toFixed(1)}</span>
                       {isAtm && (
                         <span className="text-[9px] px-1 rounded bg-cyan-400 text-slate-950 font-black">
                           ATM
                         </span>
+                      )}
+                      {onCompareStrike && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onCompareStrike(strike);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 hover:bg-cyan-500/20 p-0.5 rounded text-cyan-400 transition-opacity"
+                          title={`Compare $${strike} strike across 10 closest DTEs`}
+                        >
+                          <CalendarRange className="w-3 h-3" />
+                        </button>
                       )}
                     </div>
                   </td>

@@ -199,6 +199,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             { id: "BULL_CALL_SPREAD", label: "Bull Call Spread" },
             { id: "BEAR_PUT_SPREAD", label: "Bear Put Spread" },
             { id: "COVERED_CALL", label: "Covered Call (Income)" },
+            { id: "CASH_SECURED_PUT", label: "Cash-Secured Put (Income)" },
             { id: "STRADDLE", label: "Long Straddle (High Vol)" },
             { id: "IRON_CONDOR", label: "Iron Condor (Rangebound)" },
           ].map((strat) => {

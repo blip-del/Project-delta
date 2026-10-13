@@ -92,21 +92,49 @@ chain_table = pd.merge(
 st.markdown(f"### 📊 Options Chain for {ticker} ({selected_exp})")
 st.dataframe(chain_table, use_container_width=True)
 
-# 4. Multi-Contract Selection & P/L Chart
-st.markdown("### 🎯 Strategy Payoff Chart")
-strikes = chain_table["strike"].tolist()
-atm_strike = min(strikes, key=lambda x: abs(x - current_price))
+# 4. Strategy & Annualized Return Calculator
+st.markdown("### 🎯 Strategy Builder & Annualized Return")
+strategy_type = st.selectbox("Strategy Preset", ["Covered Call", "Cash-Secured Put", "Long Call", "Bull Call Spread"])
 
-# Strategy simulation points
-sim_prices = np.linspace(current_price * 0.7, current_price * 1.3, 100)
-# Long Call Payoff calculation example
-call_row = chain_table[chain_table["strike"] == atm_strike].iloc[0]
-premium = call_row["ask_call"] if call_row["ask_call"] > 0 else call_row["lastPrice_call"]
-payoffs = [max(0, p - atm_strike) * 100 - (premium * 100) for p in sim_prices]
+from datetime import datetime
+dte = max(1, (datetime.strptime(selected_exp, "%Y-%m-%d") - datetime.now()).days)
+
+if strategy_type == "Covered Call":
+    col1, col2 = st.columns(2)
+    with col1:
+        stock_basis = st.number_input("Stock Purchase / Entry Price ($)", value=float(current_price), step=1.0)
+    with col2:
+        otm_calls = chain_table[chain_table["strike"] >= current_price]
+        target_strike = otm_calls.iloc[0]["strike"] if not otm_calls.empty else atm_strike
+        chosen_strike = st.selectbox("Call Strike to Sell", options=chain_table["strike"], index=chain_table["strike"].tolist().index(target_strike))
+    
+    call_row = chain_table[chain_table["strike"] == chosen_strike].iloc[0]
+    call_premium = call_row["bid_call"] if call_row["bid_call"] > 0 else call_row["lastPrice_call"]
+    
+    net_cost = (stock_basis * 100) - (call_premium * 100)
+    max_gain = ((chosen_strike - stock_basis) * 100) + (call_premium * 100)
+    raw_return = (max_gain / net_cost) * 100
+    annualized_return = raw_return * (365 / dte)
+    
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Net Capital Outlay", f"\${net_cost:,.2f}")
+    m2.metric("Max Profit", f"\${max_gain:,.2f}", f"{raw_return:.1f}%")
+    m3.metric("Annualized Return (APR)", f"{annualized_return:.1f}%", f"{dte}d pace")
+    m4.metric("Breakeven", f"\${(stock_basis - call_premium):.2f}")
+    
+    # Payoff curve
+    sim_prices = np.linspace(current_price * 0.7, current_price * 1.3, 100)
+    payoffs = [min((p - stock_basis) * 100, (chosen_strike - stock_basis) * 100) + (call_premium * 100) for p in sim_prices]
+else:
+    # Standard option payoff
+    call_row = chain_table[chain_table["strike"] == atm_strike].iloc[0]
+    premium = call_row["ask_call"] if call_row["ask_call"] > 0 else call_row["lastPrice_call"]
+    sim_prices = np.linspace(current_price * 0.7, current_price * 1.3, 100)
+    payoffs = [max(0, p - atm_strike) * 100 - (premium * 100) for p in sim_prices]
 
 fig = go.Figure()
 fig.add_hline(y=0, line_color="#475569")
-fig.add_vline(x=current_price, line_dash="dash", line_color="#38bdf8", annotation_text="Current Price")
+fig.add_vline(x=current_price, line_dash="dash", line_color="#38bdf8", annotation_text=f"Current: \${current_price:.2f}")
 fig.add_trace(go.Scatter(x=sim_prices, y=payoffs, mode="lines", name="Payoff at Expiration", line=dict(color="#00dc82", width=3)))
 fig.update_layout(paper_bgcolor="#080d14", plot_bgcolor="#0d1520", font=dict(color="#94a3b8"))
 st.plotly_chart(fig, use_container_width=True)

@@ -13,7 +13,9 @@ import { MetricsCards } from "./components/MetricsCards";
 import { OptionsChainTable } from "./components/OptionsChainTable";
 import { StrategyBuilder } from "./components/StrategyBuilder";
 import { PayoffChart } from "./components/PayoffChart";
+import { EarlyExitRollCalculator } from "./components/EarlyExitRollCalculator";
 import { PythonStreamlitModal } from "./components/PythonStreamlitModal";
+import { DteComparisonView } from "./components/DteComparisonView";
 import {
   Table,
   TrendingUp,
@@ -24,6 +26,8 @@ import {
   Sparkles,
   ChevronRight,
   HelpCircle,
+  Layers,
+  CalendarRange,
 } from "lucide-react";
 
 export default function App() {
@@ -34,7 +38,9 @@ export default function App() {
 
   const [selectedExpiration, setSelectedExpiration] = useState<number>(0);
   const [strikeFilter, setStrikeFilter] = useState<string>("ATM_15");
-  const [activeTab, setActiveTab] = useState<"CHAIN" | "STRATEGY" | "METRICS" | "STREAMLIT">("CHAIN");
+  const [activeTab, setActiveTab] = useState<"CHAIN" | "DTE_MATRIX" | "STRATEGY" | "METRICS" | "STREAMLIT">("CHAIN");
+  const [compareStrike, setCompareStrike] = useState<number | undefined>(undefined);
+  const [compareStrategy, setCompareStrategy] = useState<"COVERED_CALL" | "CASH_SECURED_PUT">("COVERED_CALL");
 
   const [selectedLegs, setSelectedLegs] = useState<StrategyLeg[]>([]);
   const [activePreset, setActivePreset] = useState<string | null>(null);
@@ -168,6 +174,7 @@ export default function App() {
         delta: contract.delta,
         contractSymbol: contract.contractSymbol,
         expirationDate: selectedExpiration,
+        impliedVolatility: contract.impliedVolatility,
       };
       setSelectedLegs((prev) => [...prev, newLeg]);
       setActivePreset(null);
@@ -184,6 +191,40 @@ export default function App() {
   // Remove Leg
   const handleRemoveLeg = (index: number) => {
     setSelectedLegs((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // Add 100 shares of underlying stock
+  const handleAddStockLeg = () => {
+    const stockLeg: StrategyLeg = {
+      id: `stock-${Date.now()}`,
+      type: "STOCK",
+      strike: currentPrice,
+      action: "BUY",
+      quantity: 1, // 1 lot = 100 shares
+      entryPrice: currentPrice,
+      delta: 1.0,
+      contractSymbol: `${ticker}_SHARES`,
+      expirationDate: selectedExpiration,
+    };
+    setSelectedLegs((prev) => [stockLeg, ...prev]);
+  };
+
+  // Jump directly to DTE Strike Comparison
+  const handleCompareStrike = (strike: number, type?: "CALL" | "PUT") => {
+    setCompareStrike(strike);
+    if (type === "PUT") {
+      setCompareStrategy("CASH_SECURED_PUT");
+    } else {
+      setCompareStrategy("COVERED_CALL");
+    }
+    setActiveTab("DTE_MATRIX");
+  };
+
+  // Select legs from DTE comparison view and load into Strategy Builder
+  const handleSelectLegsForStrategy = (legs: StrategyLeg[], presetName: string) => {
+    setSelectedLegs(legs);
+    setActivePreset(presetName);
+    setActiveTab("STRATEGY");
   };
 
   // Apply Strategy Preset
@@ -214,6 +255,7 @@ export default function App() {
       delta: c.delta,
       contractSymbol: c.contractSymbol,
       expirationDate: selectedExpiration,
+      impliedVolatility: c.impliedVolatility,
     });
 
     switch (presetId) {
@@ -246,7 +288,25 @@ export default function App() {
       case "COVERED_CALL": {
         const otmCall = calls[Math.min(calls.length - 1, safeAtmIdx + 1)];
         if (otmCall) {
-          setSelectedLegs([makeLeg(otmCall, "CALL", "SELL")]);
+          const stockLeg: StrategyLeg = {
+            id: `stock-${Date.now()}`,
+            type: "STOCK",
+            strike: currentPrice,
+            action: "BUY",
+            quantity: 1, // 1 lot = 100 shares
+            entryPrice: currentPrice,
+            delta: 1.0,
+            contractSymbol: `${ticker}_SHARES`,
+            expirationDate: selectedExpiration,
+          };
+          setSelectedLegs([stockLeg, makeLeg(otmCall, "CALL", "SELL")]);
+        }
+        break;
+      }
+      case "CASH_SECURED_PUT": {
+        const otmPut = puts[Math.max(0, safeAtmIdx - 1)];
+        if (otmPut) {
+          setSelectedLegs([makeLeg(otmPut, "PUT", "SELL")]);
         }
         break;
       }
@@ -366,6 +426,21 @@ export default function App() {
                 </button>
 
                 <button
+                  onClick={() => setActiveTab("DTE_MATRIX")}
+                  className={`flex items-center gap-2 px-4 py-2.5 text-xs font-mono font-bold border-b-2 transition-all ${
+                    activeTab === "DTE_MATRIX"
+                      ? "border-emerald-400 text-emerald-300 bg-emerald-500/5"
+                      : "border-transparent text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <CalendarRange className="w-3.5 h-3.5" />
+                  <span>DTE Strike Matrix</span>
+                  <span className="px-1.5 py-0.2 rounded text-[9px] bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30">
+                    COMPARE
+                  </span>
+                </button>
+
+                <button
                   onClick={() => setActiveTab("STRATEGY")}
                   className={`flex items-center gap-2 px-4 py-2.5 text-xs font-mono font-bold border-b-2 transition-all ${
                     activeTab === "STRATEGY"
@@ -414,6 +489,17 @@ export default function App() {
               </div>
             </div>
 
+            {/* TAB CONTENT: DTE STRIKE MATRIX */}
+            {activeTab === "DTE_MATRIX" && (
+              <DteComparisonView
+                ticker={ticker}
+                currentPrice={currentPrice}
+                initialStrike={compareStrike}
+                initialStrategy={compareStrategy}
+                onSelectLegsForStrategy={handleSelectLegsForStrategy}
+              />
+            )}
+
             {/* TAB CONTENT 1: OPTIONS CHAIN TABLE */}
             {activeTab === "CHAIN" && (
               <div className="space-y-6">
@@ -424,6 +510,7 @@ export default function App() {
                   selectedLegs={selectedLegs}
                   onToggleContract={handleToggleContract}
                   strikeFilter={strikeFilter}
+                  onCompareStrike={handleCompareStrike}
                 />
 
                 {/* Strategy Summary & Quick Chart Preview */}
@@ -432,17 +519,31 @@ export default function App() {
                   metrics={strategyMetrics}
                   dte={dte}
                   currentPrice={currentPrice}
+                  ticker={ticker}
+                  activePreset={activePreset}
                   onUpdateLeg={handleUpdateLeg}
                   onRemoveLeg={handleRemoveLeg}
                   onClearAll={() => setSelectedLegs([])}
+                  onAddStockLeg={handleAddStockLeg}
                 />
 
                 {selectedLegs.length > 0 && (
-                  <PayoffChart
-                    legs={selectedLegs}
-                    metrics={strategyMetrics}
-                    currentPrice={currentPrice}
-                  />
+                  <>
+                    <PayoffChart
+                      legs={selectedLegs}
+                      metrics={strategyMetrics}
+                      currentPrice={currentPrice}
+                      dte={dte}
+                    />
+
+                    <EarlyExitRollCalculator
+                      legs={selectedLegs}
+                      metrics={strategyMetrics}
+                      dte={dte}
+                      currentStockPrice={currentPrice}
+                      ticker={ticker}
+                    />
+                  </>
                 )}
               </div>
             )}
@@ -454,6 +555,7 @@ export default function App() {
                   legs={selectedLegs}
                   metrics={strategyMetrics}
                   currentPrice={currentPrice}
+                  dte={dte}
                 />
 
                 <StrategyBuilder
@@ -461,10 +563,23 @@ export default function App() {
                   metrics={strategyMetrics}
                   dte={dte}
                   currentPrice={currentPrice}
+                  ticker={ticker}
+                  activePreset={activePreset}
                   onUpdateLeg={handleUpdateLeg}
                   onRemoveLeg={handleRemoveLeg}
                   onClearAll={() => setSelectedLegs([])}
+                  onAddStockLeg={handleAddStockLeg}
                 />
+
+                {selectedLegs.length > 0 && (
+                  <EarlyExitRollCalculator
+                    legs={selectedLegs}
+                    metrics={strategyMetrics}
+                    dte={dte}
+                    currentStockPrice={currentPrice}
+                    ticker={ticker}
+                  />
+                )}
               </div>
             )}
 
