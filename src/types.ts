@@ -127,3 +127,28 @@ export interface DteComparisonData {
   sweetSpotDte?: number;
 }
 
+export interface PinnedOptionContract {
+  id: string;
+  strategy: DteStrategyType;
+  symbol: string;
+  contractSymbol: string;
+  expirationDate: number;
+  formattedDate: string;
+  dte: number;
+  strike: number;
+  bid: number;
+  ask: number;
+  mid: number;
+  spread: number;
+  lastPrice: number;
+  volume: number;
+  openInterest: number;
+  impliedVolatility: number;
+  delta: number;
+  inTheMoney: boolean;
+
+  // Custom user override for option cost / fill price
+  customFillPrice: number;
+  priceMode: "BID" | "MID" | "CUSTOM";
+}
+

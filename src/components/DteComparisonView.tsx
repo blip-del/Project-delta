@@ -3,9 +3,11 @@ import {
   DteComparisonData,
   DteComparisonRow,
   DteStrategyType,
+  PinnedOptionContract,
   StrategyLeg,
 } from "../types";
 import { fetchStrikeDteComparison } from "../services/optionsService";
+import { PinnedComparisonBench } from "./PinnedComparisonBench";
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -34,6 +36,8 @@ import {
   Zap,
   Info,
   Check,
+  Bookmark,
+  BookmarkCheck,
 } from "lucide-react";
 
 interface DteComparisonViewProps {
@@ -73,6 +77,24 @@ export const DteComparisonView: React.FC<DteComparisonViewProps> = ({
       setCostBasis(currentPrice);
     }
   }, [currentPrice, isCustomCostBasis]);
+
+  // Pinned comparison bench state (persists across strike/strategy changes and saved in localStorage)
+  const [pinnedContracts, setPinnedContracts] = useState<PinnedOptionContract[]>(() => {
+    try {
+      const saved = localStorage.getItem(`ais_pinned_${ticker}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`ais_pinned_${ticker}`, JSON.stringify(pinnedContracts));
+    } catch (e) {
+      // ignore
+    }
+  }, [pinnedContracts, ticker]);
 
   // Load comparison data
   const loadComparison = async (
@@ -286,6 +308,66 @@ export const DteComparisonView: React.FC<DteComparisonViewProps> = ({
 
       onSelectLegsForStrategy(legs, `Cash-Secured Put (${row.formattedDate} $${row.strike}P)`);
     }
+  };
+
+  // Pinning Handlers
+  const handleTogglePinContract = (row: DteComparisonRow) => {
+    const contractId = `${strategy}-${row.contractSymbol || `${ticker}-${row.strike}-${row.expirationDate}`}`;
+    setPinnedContracts((prev) => {
+      const exists = prev.some((c) => c.id === contractId);
+      if (exists) {
+        return prev.filter((c) => c.id !== contractId);
+      } else {
+        const defaultFill = row.bid > 0 ? row.bid : (row.lastPrice > 0 ? row.lastPrice : 0.05);
+        const newPinned: PinnedOptionContract = {
+          id: contractId,
+          strategy,
+          symbol: ticker,
+          contractSymbol: row.contractSymbol,
+          expirationDate: row.expirationDate,
+          formattedDate: row.formattedDate,
+          dte: row.dte,
+          strike: row.strike,
+          bid: row.bid,
+          ask: row.ask,
+          mid: row.mid,
+          spread: row.spread,
+          lastPrice: row.lastPrice,
+          volume: row.volume,
+          openInterest: row.openInterest,
+          impliedVolatility: row.impliedVolatility,
+          delta: row.delta,
+          inTheMoney: row.inTheMoney,
+          customFillPrice: defaultFill,
+          priceMode: "BID",
+        };
+        return [...prev, newPinned];
+      }
+    });
+  };
+
+  const handleUpdateContractPrice = (id: string, price: number, mode: "BID" | "MID" | "CUSTOM") => {
+    setPinnedContracts((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, customFillPrice: price, priceMode: mode } : c))
+    );
+  };
+
+  const handleSetAllPricesMode = (mode: "BID" | "MID") => {
+    setPinnedContracts((prev) =>
+      prev.map((c) => ({
+        ...c,
+        customFillPrice: mode === "MID" ? c.mid : c.bid,
+        priceMode: mode,
+      }))
+    );
+  };
+
+  const handleRemovePinned = (id: string) => {
+    setPinnedContracts((prev) => prev.filter((c) => c.id !== id));
+  };
+
+  const handleClearAllPinned = () => {
+    setPinnedContracts([]);
   };
 
   return (
@@ -827,20 +909,36 @@ export const DteComparisonView: React.FC<DteComparisonViewProps> = ({
             <span className="text-slate-400">({sortedRows.length} Expirations)</span>
           </div>
 
-          {/* Sort Controls */}
-          <div className="flex items-center gap-2">
-            <span className="text-slate-400">Sort by:</span>
-            <select
-              value={sortBy}
-              onChange={(e: any) => setSortBy(e.target.value)}
-              className="bg-[#070d17] border border-[#1a2c42] rounded px-2.5 py-1 text-xs font-mono text-slate-300 focus:outline-none focus:border-emerald-400"
-            >
-              <option value="dte">DTE (Chronological)</option>
-              <option value="apr">Annualized APR % (Highest First)</option>
-              <option value="premium">Premium Collected ($)</option>
-              <option value="maxReturn">Max Annualized APR %</option>
-              <option value="cushion">Downside Cushion %</option>
-            </select>
+          {/* Right controls: Pinned Jump button & Sort Controls */}
+          <div className="flex items-center gap-3">
+            {pinnedContracts.length > 0 && (
+              <button
+                onClick={() => {
+                  const el = document.getElementById("pinned-comparison-bench");
+                  el?.scrollIntoView({ behavior: "smooth" });
+                }}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 text-xs font-mono font-bold transition-all shadow-sm"
+                title="Scroll down to Pinned Comparison Bench"
+              >
+                <BookmarkCheck className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Bench ({pinnedContracts.length}) ↓</span>
+              </button>
+            )}
+
+            <div className="flex items-center gap-2">
+              <span className="text-slate-400">Sort by:</span>
+              <select
+                value={sortBy}
+                onChange={(e: any) => setSortBy(e.target.value)}
+                className="bg-[#070d17] border border-[#1a2c42] rounded px-2.5 py-1 text-xs font-mono text-slate-300 focus:outline-none focus:border-emerald-400"
+              >
+                <option value="dte">DTE (Chronological)</option>
+                <option value="apr">Annualized APR % (Highest First)</option>
+                <option value="premium">Premium Collected ($)</option>
+                <option value="maxReturn">Max Annualized APR %</option>
+                <option value="cushion">Downside Cushion %</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -881,6 +979,7 @@ export const DteComparisonView: React.FC<DteComparisonViewProps> = ({
                   <th className="py-3 px-3 text-right">Max APR %</th>
                   <th className="py-3 px-3 text-right">Downside Cushion</th>
                   <th className="py-3 px-3 text-right">Breakeven</th>
+                  <th className="py-3 px-3 text-center">Pin</th>
                   <th className="py-3 px-3 text-center">Action</th>
                 </tr>
               </thead>
@@ -889,13 +988,15 @@ export const DteComparisonView: React.FC<DteComparisonViewProps> = ({
                   const isTopApr = highestAprRow && row.expirationDate === highestAprRow.expirationDate;
                   const isSweetSpot = sweetSpotRow && row.expirationDate === sweetSpotRow.expirationDate;
                   const isTopPremium = highestPremiumRow && row.expirationDate === highestPremiumRow.expirationDate;
+                  const contractId = `${strategy}-${row.contractSymbol || `${ticker}-${row.strike}-${row.expirationDate}`}`;
+                  const isPinned = pinnedContracts.some((c) => c.id === contractId);
 
                   return (
                     <tr
                       key={row.expirationDate}
                       className={`hover:bg-[#0e1929] transition-colors ${
                         isSweetSpot ? "bg-emerald-500/[0.04]" : ""
-                      }`}
+                      } ${isPinned ? "bg-emerald-950/20" : ""}`}
                     >
                       {/* Rank */}
                       <td className="py-2.5 px-3 text-center font-bold">
@@ -1002,6 +1103,26 @@ export const DteComparisonView: React.FC<DteComparisonViewProps> = ({
                         ${row.breakEven.toFixed(2)}
                       </td>
 
+                      {/* Pin to Comparison Bench Button */}
+                      <td className="py-2.5 px-3 text-center">
+                        <button
+                          onClick={() => handleTogglePinContract(row)}
+                          className={`px-2 py-1 rounded text-[11px] font-mono font-bold transition-all flex items-center gap-1 mx-auto ${
+                            isPinned
+                              ? "bg-emerald-400 text-slate-950 font-black shadow-md border border-emerald-300"
+                              : "bg-[#101b2b] hover:bg-emerald-500/20 text-slate-300 hover:text-emerald-300 border border-[#1a2d47] hover:border-emerald-500/40"
+                          }`}
+                          title={
+                            isPinned
+                              ? "Pinned to Comparison Bench below (click to unpin)"
+                              : "Pin this contract to the Comparison Bench below across strikes/DTEs"
+                          }
+                        >
+                          {isPinned ? <BookmarkCheck className="w-3.5 h-3.5 text-slate-950" /> : <Bookmark className="w-3.5 h-3.5" />}
+                          <span>{isPinned ? "Pinned" : "+ Pin"}</span>
+                        </button>
+                      </td>
+
                       {/* Load in Builder Button */}
                       <td className="py-2.5 px-3 text-center">
                         <button
@@ -1020,6 +1141,31 @@ export const DteComparisonView: React.FC<DteComparisonViewProps> = ({
             </table>
           </div>
         )}
+      </div>
+
+      {/* PINNED CONTRACTS COMPARISON BENCH */}
+      <div id="pinned-comparison-bench">
+        <PinnedComparisonBench
+          ticker={ticker}
+          currentPrice={currentPrice}
+          pinnedContracts={pinnedContracts}
+          costBasis={costBasis}
+          isCustomCostBasis={isCustomCostBasis}
+          contractCount={contractCount}
+          onUpdateCostBasis={(newBasis) => {
+            setCostBasis(newBasis);
+            setIsCustomCostBasis(true);
+          }}
+          onResetCostBasis={() => {
+            setCostBasis(currentPrice);
+            setIsCustomCostBasis(false);
+          }}
+          onUpdateContractPrice={handleUpdateContractPrice}
+          onSetAllPricesMode={handleSetAllPricesMode}
+          onRemoveContract={handleRemovePinned}
+          onClearAll={handleClearAllPinned}
+          onSelectLegsForStrategy={onSelectLegsForStrategy}
+        />
       </div>
 
       {/* FOOTER EXPLANATION & FORMULAS CARD */}
