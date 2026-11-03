@@ -1,6 +1,6 @@
 import React from "react";
-import { OptionContract, StrategyLeg } from "../types";
-import { Plus, Check, TrendingUp, TrendingDown, CalendarRange } from "lucide-react";
+import { OptionContract, StrategyLeg, OrderAction } from "../types";
+import { Plus, Check, TrendingUp, TrendingDown, CalendarRange, Scale } from "lucide-react";
 
 interface OptionsChainTableProps {
   currentPrice: number;
@@ -10,6 +10,8 @@ interface OptionsChainTableProps {
   onToggleContract: (contract: OptionContract, type: "CALL" | "PUT", defaultAction: "BUY" | "SELL") => void;
   strikeFilter: string;
   onCompareStrike?: (strike: number, type?: "CALL" | "PUT") => void;
+  onPinToGreekBench?: (contract: OptionContract, type: "CALL" | "PUT", action?: OrderAction) => void;
+  isContractPinnedToGreekBench?: (contractSymbol: string) => boolean;
 }
 
 export const OptionsChainTable: React.FC<OptionsChainTableProps> = ({
@@ -20,6 +22,8 @@ export const OptionsChainTable: React.FC<OptionsChainTableProps> = ({
   onToggleContract,
   strikeFilter,
   onCompareStrike,
+  onPinToGreekBench,
+  isContractPinnedToGreekBench,
 }) => {
   // Map puts and calls by strike
   const strikesSet = new Set<number>();
@@ -101,7 +105,7 @@ export const OptionsChainTable: React.FC<OptionsChainTableProps> = ({
           <thead className="sticky top-0 bg-[#0c1421] text-[11px] text-slate-400 border-b border-[#19273a] z-10">
             <tr>
               {/* Call Columns */}
-              <th className="py-2 px-2 text-center w-8">Sel</th>
+              <th className="py-2 px-1 text-center w-12" title="Select for Strategy / Pin to Greek Bench">Sel/Pin</th>
               <th className="py-2 px-2 text-right">Bid</th>
               <th className="py-2 px-2 text-right">Ask</th>
               <th className="py-2 px-2 text-right">Last</th>
@@ -123,7 +127,7 @@ export const OptionsChainTable: React.FC<OptionsChainTableProps> = ({
               <th className="py-2 px-2 text-left">Last</th>
               <th className="py-2 px-2 text-left">Bid</th>
               <th className="py-2 px-2 text-left">Ask</th>
-              <th className="py-2 px-2 text-center w-8">Sel</th>
+              <th className="py-2 px-1 text-center w-12" title="Select for Strategy / Pin to Greek Bench">Pin/Sel</th>
             </tr>
           </thead>
 
@@ -138,6 +142,8 @@ export const OptionsChainTable: React.FC<OptionsChainTableProps> = ({
 
               const isCallSelected = call ? isLegSelected(call.contractSymbol) : false;
               const isPutSelected = put ? isLegSelected(put.contractSymbol) : false;
+              const isCallGreekPinned = call && isContractPinnedToGreekBench ? isContractPinnedToGreekBench(call.contractSymbol) : false;
+              const isPutGreekPinned = put && isContractPinnedToGreekBench ? isContractPinnedToGreekBench(put.contractSymbol) : false;
 
               return (
                 <tr
@@ -147,14 +153,34 @@ export const OptionsChainTable: React.FC<OptionsChainTableProps> = ({
                   }`}
                 >
                   {/* --- CALL SIDE --- */}
-                  <td className={`py-2 px-2 text-center ${isCallItm ? "bg-emerald-950/20" : ""}`}>
+                  <td className={`py-2 px-1 text-center ${isCallItm ? "bg-emerald-950/20" : ""}`}>
                     {call && (
-                      <input
-                        type="checkbox"
-                        checked={isCallSelected}
-                        onChange={() => onToggleContract(call, "CALL", "BUY")}
-                        className="rounded bg-slate-800 border-slate-700 text-emerald-500 focus:ring-0 cursor-pointer w-3.5 h-3.5"
-                      />
+                      <div className="flex items-center justify-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={isCallSelected}
+                          onChange={() => onToggleContract(call, "CALL", "BUY")}
+                          className="rounded bg-slate-800 border-slate-700 text-emerald-500 focus:ring-0 cursor-pointer w-3.5 h-3.5"
+                          title="Select for Strategy Builder"
+                        />
+                        {onPinToGreekBench && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onPinToGreekBench(call, "CALL", "BUY");
+                            }}
+                            className={`p-1 rounded transition-colors ${
+                              isCallGreekPinned
+                                ? "text-cyan-300 bg-cyan-500/20 ring-1 ring-cyan-500/40"
+                                : "text-slate-500 hover:text-cyan-300 hover:bg-slate-800"
+                            }`}
+                            title={isCallGreekPinned ? "Pinned in Greek Bench (Click to toggle)" : "Pin Call to Greek Bench (BUY)"}
+                          >
+                            <Scale className="w-3 h-3" />
+                          </button>
+                        )}
+                      </div>
                     )}
                   </td>
 
@@ -291,15 +317,35 @@ export const OptionsChainTable: React.FC<OptionsChainTableProps> = ({
                     {put ? `$${put.ask.toFixed(2)}` : "-"}
                   </td>
 
-                  {/* Put Checkbox */}
-                  <td className={`py-2 px-2 text-center ${isPutItm ? "bg-rose-950/20" : ""}`}>
+                  {/* Put Checkbox & Pin */}
+                  <td className={`py-2 px-1 text-center ${isPutItm ? "bg-rose-950/20" : ""}`}>
                     {put && (
-                      <input
-                        type="checkbox"
-                        checked={isPutSelected}
-                        onChange={() => onToggleContract(put, "PUT", "BUY")}
-                        className="rounded bg-slate-800 border-slate-700 text-rose-500 focus:ring-0 cursor-pointer w-3.5 h-3.5"
-                      />
+                      <div className="flex items-center justify-center gap-1">
+                        {onPinToGreekBench && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onPinToGreekBench(put, "PUT", "BUY");
+                            }}
+                            className={`p-1 rounded transition-colors ${
+                              isPutGreekPinned
+                                ? "text-cyan-300 bg-cyan-500/20 ring-1 ring-cyan-500/40"
+                                : "text-slate-500 hover:text-cyan-300 hover:bg-slate-800"
+                            }`}
+                            title={isPutGreekPinned ? "Pinned in Greek Bench (Click to toggle)" : "Pin Put to Greek Bench (BUY)"}
+                          >
+                            <Scale className="w-3 h-3" />
+                          </button>
+                        )}
+                        <input
+                          type="checkbox"
+                          checked={isPutSelected}
+                          onChange={() => onToggleContract(put, "PUT", "BUY")}
+                          className="rounded bg-slate-800 border-slate-700 text-rose-500 focus:ring-0 cursor-pointer w-3.5 h-3.5"
+                          title="Select for Strategy Builder"
+                        />
+                      </div>
                     )}
                   </td>
                 </tr>

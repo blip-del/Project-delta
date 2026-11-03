@@ -4,7 +4,16 @@
  */
 
 import React, { useState, useEffect, useMemo } from "react";
-import { OptionChainData, OptionContract, StrategyLeg, OptionType, OrderAction } from "./types";
+import {
+  OptionChainData,
+  OptionContract,
+  StrategyLeg,
+  OptionType,
+  OrderAction,
+  GreekBenchContract,
+  DteComparisonRow,
+  DteStrategyType,
+} from "./types";
 import { fetchOptionsData } from "./services/optionsService";
 import { calculateStrategyMetrics, calculateKeyLevels } from "./utils/optionsMath";
 import { Header } from "./components/Header";
@@ -16,6 +25,7 @@ import { PayoffChart } from "./components/PayoffChart";
 import { EarlyExitRollCalculator } from "./components/EarlyExitRollCalculator";
 import { PythonStreamlitModal } from "./components/PythonStreamlitModal";
 import { DteComparisonView } from "./components/DteComparisonView";
+import { GreekBenchView } from "./components/GreekBenchView";
 import {
   Table,
   TrendingUp,
@@ -28,6 +38,7 @@ import {
   HelpCircle,
   Layers,
   CalendarRange,
+  Scale,
 } from "lucide-react";
 
 export default function App() {
@@ -38,7 +49,9 @@ export default function App() {
 
   const [selectedExpiration, setSelectedExpiration] = useState<number>(0);
   const [strikeFilter, setStrikeFilter] = useState<string>("ATM_15");
-  const [activeTab, setActiveTab] = useState<"CHAIN" | "DTE_MATRIX" | "STRATEGY" | "METRICS" | "STREAMLIT">("CHAIN");
+  const [activeTab, setActiveTab] = useState<
+    "CHAIN" | "DTE_MATRIX" | "GREEK_BENCH" | "STRATEGY" | "METRICS" | "STREAMLIT"
+  >("CHAIN");
   const [compareStrike, setCompareStrike] = useState<number | undefined>(undefined);
   const [compareStrategy, setCompareStrategy] = useState<"COVERED_CALL" | "CASH_SECURED_PUT">("COVERED_CALL");
 
@@ -46,6 +59,24 @@ export default function App() {
   const [activePreset, setActivePreset] = useState<string | null>(null);
   const [isFavorite, setIsFavorite] = useState(false);
   const [showStreamlitModal, setShowStreamlitModal] = useState(false);
+
+  // Persistent Greek & Capital Efficiency Bench State (multi-ticker enabled)
+  const [greekBenchContracts, setGreekBenchContracts] = useState<GreekBenchContract[]>(() => {
+    try {
+      const saved = localStorage.getItem("ais_greek_capital_efficiency_bench");
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("ais_greek_capital_efficiency_bench", JSON.stringify(greekBenchContracts));
+    } catch (e) {
+      // ignore
+    }
+  }, [greekBenchContracts]);
 
   // Load options data
   const loadData = async (targetTicker: string, expDate?: number) => {
@@ -78,6 +109,53 @@ export default function App() {
                 expirationDate: res.selectedExpiration,
               },
             ]);
+          }
+        }
+      }
+
+      // If Greek bench is empty on first startup, seed 2 liquid options from the ticker
+      const hasSeeded = localStorage.getItem("ais_greek_bench_seeded");
+      if (!hasSeeded && greekBenchContracts.length === 0 && res.options?.[0]) {
+        const currentP = res.quote.regularMarketPrice;
+        const calls = res.options[0].calls;
+        if (calls.length >= 2) {
+          const sorted = [...calls].sort(
+            (a, b) => Math.abs(a.strike - currentP) - Math.abs(b.strike - currentP)
+          );
+          const c1 = sorted[0];
+          const c2 = sorted[1];
+          const seedItems: GreekBenchContract[] = [c1, c2].filter(Boolean).map((c, idx) => ({
+            id: `gb-${targetTicker}-${c.contractSymbol}-BUY-${idx}`,
+            ticker: targetTicker,
+            underlyingPriceAtPin: currentP,
+            contractSymbol: c.contractSymbol,
+            optionType: "CALL" as const,
+            action: "BUY" as const,
+            strike: c.strike,
+            expirationDate: res.selectedExpiration,
+            formattedDate: new Date(res.selectedExpiration * 1000).toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "2-digit",
+            }),
+            dte: res.dte,
+            bid: c.bid,
+            ask: c.ask,
+            mid: Number(((c.bid + c.ask) / 2).toFixed(2)),
+            lastPrice: c.lastPrice,
+            impliedVolatility: c.impliedVolatility,
+            delta: c.delta,
+            gamma: c.gamma,
+            theta: c.theta,
+            vega: c.vega,
+            inTheMoney: c.inTheMoney,
+            quantity: 1,
+            customFillPrice: c.ask > 0 ? c.ask : c.lastPrice,
+            priceMode: "ASK" as const,
+          }));
+          if (seedItems.length > 0) {
+            setGreekBenchContracts(seedItems);
+            localStorage.setItem("ais_greek_bench_seeded", "true");
           }
         }
       }
@@ -225,6 +303,139 @@ export default function App() {
     setSelectedLegs(legs);
     setActivePreset(presetName);
     setActiveTab("STRATEGY");
+  };
+
+  // Greek Bench Handlers
+  const handlePinToGreekBench = (
+    contract: OptionContract,
+    type: "CALL" | "PUT",
+    action: OrderAction = "BUY",
+    customTicker?: string,
+    customDte?: number,
+    customExpDate?: number
+  ) => {
+    const sym = customTicker || ticker;
+    const currentP = data?.quote?.regularMarketPrice || 150.0;
+    const expDate = customExpDate || selectedExpiration;
+    const daysDte = customDte || dte;
+    const id = `gb-${sym}-${contract.contractSymbol}-${action}`;
+
+    setGreekBenchContracts((prev) => {
+      const exists = prev.find((c) => c.contractSymbol === contract.contractSymbol);
+      if (exists) {
+        // Toggle off if already pinned
+        return prev.filter((c) => c.contractSymbol !== contract.contractSymbol);
+      }
+
+      const defaultFill =
+        action === "BUY"
+          ? (contract.ask > 0 ? contract.ask : (contract.lastPrice > 0 ? contract.lastPrice : 0.05))
+          : (contract.bid > 0 ? contract.bid : (contract.lastPrice > 0 ? contract.lastPrice : 0.05));
+
+      const newContract: GreekBenchContract = {
+        id,
+        ticker: sym,
+        underlyingPriceAtPin: currentP,
+        contractSymbol: contract.contractSymbol,
+        optionType: type,
+        action,
+        strike: contract.strike,
+        expirationDate: expDate,
+        formattedDate: new Date(expDate * 1000).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          year: "2-digit",
+        }),
+        dte: daysDte,
+        bid: contract.bid,
+        ask: contract.ask,
+        mid: Number(((contract.bid + contract.ask) / 2).toFixed(2)),
+        lastPrice: contract.lastPrice,
+        impliedVolatility: contract.impliedVolatility,
+        delta: contract.delta,
+        gamma: contract.gamma,
+        theta: contract.theta,
+        vega: contract.vega,
+        inTheMoney: contract.inTheMoney,
+        quantity: 1,
+        customFillPrice: defaultFill,
+        priceMode: action === "BUY" ? "ASK" : "BID",
+      };
+
+      return [newContract, ...prev];
+    });
+  };
+
+  const isContractPinnedToGreekBench = (contractSymbol: string) => {
+    return greekBenchContracts.some((c) => c.contractSymbol === contractSymbol);
+  };
+
+  const handleUpdateGreekBenchPrice = (
+    id: string,
+    price: number,
+    mode: "BID" | "ASK" | "MID" | "CUSTOM"
+  ) => {
+    setGreekBenchContracts((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, customFillPrice: price, priceMode: mode } : c))
+    );
+  };
+
+  const handleUpdateGreekBenchAction = (id: string, action: OrderAction) => {
+    setGreekBenchContracts((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, action } : c))
+    );
+  };
+
+  const handleUpdateGreekBenchQuantity = (id: string, quantity: number) => {
+    setGreekBenchContracts((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, quantity: Math.max(1, quantity) } : c))
+    );
+  };
+
+  const handleRemoveGreekBenchContract = (id: string) => {
+    setGreekBenchContracts((prev) => prev.filter((c) => c.id !== id));
+  };
+
+  const handleClearGreekBench = () => {
+    setGreekBenchContracts([]);
+    try {
+      localStorage.setItem("ais_greek_bench_seeded", "true");
+    } catch {}
+  };
+
+  const handlePinDteRowToGreekBench = (
+    row: DteComparisonRow,
+    targetTicker: string,
+    strat: DteStrategyType
+  ) => {
+    const isCall = strat === "COVERED_CALL";
+    const optionContract: OptionContract = {
+      contractSymbol: row.contractSymbol,
+      strike: row.strike,
+      currency: "USD",
+      lastPrice: row.lastPrice,
+      change: 0,
+      percentChange: 0,
+      volume: row.volume,
+      openInterest: row.openInterest,
+      bid: row.bid,
+      ask: row.ask,
+      impliedVolatility: row.impliedVolatility,
+      inTheMoney: row.inTheMoney,
+      delta: row.delta,
+      gamma: row.gamma,
+      theta: row.theta,
+      vega: row.vega,
+    };
+
+    handlePinToGreekBench(
+      optionContract,
+      isCall ? "CALL" : "PUT",
+      "BUY",
+      targetTicker,
+      row.dte,
+      row.expirationDate
+    );
   };
 
   // Apply Strategy Preset
@@ -441,6 +652,23 @@ export default function App() {
                 </button>
 
                 <button
+                  onClick={() => setActiveTab("GREEK_BENCH")}
+                  className={`flex items-center gap-2 px-4 py-2.5 text-xs font-mono font-bold border-b-2 transition-all ${
+                    activeTab === "GREEK_BENCH"
+                      ? "border-cyan-400 text-cyan-300 bg-cyan-500/5"
+                      : "border-transparent text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  <Scale className="w-3.5 h-3.5" />
+                  <span>Greek & Capital Bench</span>
+                  {greekBenchContracts.length > 0 && (
+                    <span className="px-1.5 py-0.2 rounded text-[10px] bg-cyan-500/20 text-cyan-300 font-bold border border-cyan-500/30">
+                      {greekBenchContracts.length}
+                    </span>
+                  )}
+                </button>
+
+                <button
                   onClick={() => setActiveTab("STRATEGY")}
                   className={`flex items-center gap-2 px-4 py-2.5 text-xs font-mono font-bold border-b-2 transition-all ${
                     activeTab === "STRATEGY"
@@ -497,6 +725,24 @@ export default function App() {
                 initialStrike={compareStrike}
                 initialStrategy={compareStrategy}
                 onSelectLegsForStrategy={handleSelectLegsForStrategy}
+                onPinToGreekBench={handlePinDteRowToGreekBench}
+                isContractPinnedToGreekBench={isContractPinnedToGreekBench}
+              />
+            )}
+
+            {/* TAB CONTENT: GREEK & CAPITAL EFFICIENCY BENCH */}
+            {activeTab === "GREEK_BENCH" && (
+              <GreekBenchView
+                currentTicker={ticker}
+                currentPrice={currentPrice}
+                contracts={greekBenchContracts}
+                onUpdateContractPrice={handleUpdateGreekBenchPrice}
+                onUpdateAction={handleUpdateGreekBenchAction}
+                onUpdateQuantity={handleUpdateGreekBenchQuantity}
+                onRemoveContract={handleRemoveGreekBenchContract}
+                onClearAll={handleClearGreekBench}
+                onSelectLegsForStrategy={handleSelectLegsForStrategy}
+                onNavigateToChain={() => setActiveTab("CHAIN")}
               />
             )}
 
@@ -511,6 +757,8 @@ export default function App() {
                   onToggleContract={handleToggleContract}
                   strikeFilter={strikeFilter}
                   onCompareStrike={handleCompareStrike}
+                  onPinToGreekBench={handlePinToGreekBench}
+                  isContractPinnedToGreekBench={isContractPinnedToGreekBench}
                 />
 
                 {/* Strategy Summary & Quick Chart Preview */}

@@ -152,3 +152,48 @@ export interface PinnedOptionContract {
   priceMode: "BID" | "MID" | "CUSTOM";
 }
 
+export interface GreekBenchContract {
+  id: string;
+  ticker: string;
+  underlyingPriceAtPin: number;
+  contractSymbol: string;
+  optionType: "CALL" | "PUT";
+  action: OrderAction; // "BUY" | "SELL" (default BUY)
+  strike: number;
+  expirationDate: number;
+  formattedDate: string;
+  dte: number;
+  bid: number;
+  ask: number;
+  mid: number;
+  lastPrice: number;
+  impliedVolatility: number;
+  delta: number;
+  gamma: number;
+  theta: number;
+  vega: number;
+  inTheMoney: boolean;
+  quantity: number;
+
+  // Custom user override for fill price
+  customFillPrice: number;
+  priceMode: "BID" | "ASK" | "MID" | "CUSTOM";
+  notes?: string;
+}
+
+export interface GreekEfficiencyMetrics {
+  effectivePrice: number;
+  totalCostOrCredit: number;
+  capitalRequired: number;
+  dtePerDollarSpent: number;
+  thetaBurnDailyPct: number;
+  dailyThetaDollars: number;
+  deltaPerDollar: number;
+  netDeltaExposure: number;
+  vegaPerDollar: number;
+  netVegaExposure: number;
+  gammaPerDollar: number;
+  breakevenPrice: number;
+  leverageRatio: number;
+}
+

@@ -1,4 +1,4 @@
-import { StrategyLeg, StrategyMetrics, OptionContract } from "../types";
+import { StrategyLeg, StrategyMetrics, OptionContract, GreekBenchContract, GreekEfficiencyMetrics } from "../types";
 
 // Standard normal cumulative distribution function (Abramowitz & Stegun approximation)
 export function normalCDF(x: number): number {
@@ -619,4 +619,106 @@ export function calculateRollScenarios(
       downsideBufferPercent: downsideBuffer2,
     },
   ];
+}
+
+// Calculate Greek Efficiency and Capital Ratios for GreekBenchContract
+export function calculateGreekEfficiency(
+  contract: GreekBenchContract,
+  currentStockPrice?: number
+): GreekEfficiencyMetrics {
+  const S = (currentStockPrice && currentStockPrice > 0) ? currentStockPrice : contract.underlyingPriceAtPin;
+  const K = contract.strike;
+  const dte = Math.max(1, contract.dte);
+  const qty = Math.max(1, contract.quantity);
+
+  // Determine effective premium price per share
+  let effectivePrice = contract.customFillPrice > 0 ? contract.customFillPrice : 0;
+  if (effectivePrice <= 0) {
+    if (contract.priceMode === "BID" && contract.bid > 0) {
+      effectivePrice = contract.bid;
+    } else if (contract.priceMode === "ASK" && contract.ask > 0) {
+      effectivePrice = contract.ask;
+    } else if (contract.priceMode === "MID" && contract.mid > 0) {
+      effectivePrice = contract.mid;
+    } else {
+      // Default fallback
+      if (contract.action === "BUY") {
+        effectivePrice = contract.ask > 0 ? contract.ask : (contract.lastPrice > 0 ? contract.lastPrice : 0.05);
+      } else {
+        effectivePrice = contract.bid > 0 ? contract.bid : (contract.lastPrice > 0 ? contract.lastPrice : 0.05);
+      }
+    }
+  }
+
+  // Safe divisor
+  const safeP = Math.max(0.01, effectivePrice);
+  const absDelta = Math.abs(contract.delta);
+  const absTheta = Math.abs(contract.theta);
+  const absVega = Math.abs(contract.vega);
+  const absGamma = Math.abs(contract.gamma);
+
+  const isBuy = contract.action === "BUY";
+  const isCall = contract.optionType === "CALL";
+
+  // Capital required: For BUY it is just the option premium (100 * P * qty);
+  // for SELL Cash-Secured Put it is (K * 100 * qty); for SELL Call it is covered stock (S * 100 * qty) or margin.
+  let capitalRequired = 0;
+  let totalCostOrCredit = 0;
+
+  if (isBuy) {
+    capitalRequired = Number((effectivePrice * 100 * qty).toFixed(2));
+    totalCostOrCredit = -capitalRequired; // debit
+  } else {
+    totalCostOrCredit = Number((effectivePrice * 100 * qty).toFixed(2)); // credit
+    if (contract.optionType === "PUT") {
+      capitalRequired = Number((K * 100 * qty).toFixed(2));
+    } else {
+      capitalRequired = Number((S * 100 * qty).toFixed(2));
+    }
+  }
+
+  // 1. DTE per dollar spent: dte / premium (calendar days of optionality per $1 of premium)
+  const dtePerDollarSpent = Number((dte / safeP).toFixed(2));
+
+  // 2. Daily Theta as % of premium: (|Theta| / Premium) * 100%
+  const thetaBurnDailyPct = Number(((absTheta / safeP) * 100).toFixed(2));
+  const dailyThetaDollars = Number(((contract.theta * 100 * qty) * (isBuy ? 1 : -1)).toFixed(2));
+
+  // 3. Delta exposure per dollar spent: Delta / Premium
+  const deltaPerDollar = Number((absDelta / safeP).toFixed(3));
+  const netDeltaExposure = Number(((isCall ? contract.delta : -absDelta) * 100 * qty * (isBuy ? 1 : -1)).toFixed(1));
+
+  // 4. Vega exposure per dollar spent: Vega / Premium
+  const vegaPerDollar = Number((absVega / safeP).toFixed(3));
+  const netVegaExposure = Number(((contract.vega * 100 * qty) * (isBuy ? 1 : -1)).toFixed(1));
+
+  // 5. Gamma per dollar spent: Gamma / Premium
+  const gammaPerDollar = Number((absGamma / safeP).toFixed(4));
+
+  // Breakeven price
+  let breakevenPrice = 0;
+  if (isCall) {
+    breakevenPrice = Number((K + effectivePrice).toFixed(2));
+  } else {
+    breakevenPrice = Number((K - effectivePrice).toFixed(2));
+  }
+
+  // Notional leverage multiplier: (S * |Delta|) / Premium
+  const leverageRatio = Number(((S * absDelta) / safeP).toFixed(1));
+
+  return {
+    effectivePrice: Number(effectivePrice.toFixed(2)),
+    totalCostOrCredit,
+    capitalRequired,
+    dtePerDollarSpent,
+    thetaBurnDailyPct,
+    dailyThetaDollars,
+    deltaPerDollar,
+    netDeltaExposure,
+    vegaPerDollar,
+    netVegaExposure,
+    gammaPerDollar,
+    breakevenPrice,
+    leverageRatio,
+  };
 }
